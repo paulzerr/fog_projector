@@ -1,186 +1,306 @@
- 
 import pygame
 import math
 import colorsys
 
-# --- CONFIGURATION ---
-FULLSCREEN = True          # Set to False for testing in windowed mode
-background_color = (0, 0, 0)
-FPS = 60                   # Locked FPS for smoothness
+# ==============================================================================
+#                               CONFIGURATION
+# ==============================================================================
 
-# Interaction Multipliers
-MAX_SIZE_RATIO = 0.95      # Max size relative to screen height
-ROTATION_SENSITIVITY = 0.1 # How fast mouse Y affects rotation
+# --- DISPLAY SETTINGS ---
+FULLSCREEN = True           # Set to False for testing in a window
+WINDOW_W, WINDOW_H = 1000, 800 # Only used if FULLSCREEN is False
+BG_COLOR = (0, 0, 0)        # Black background is best for projection
+FPS = 60                    # Smooth framerate
 
-# --- SHAPE DEFINITIONS ---
-class GeometryEngine:
-    def __init__(self, center_x, center_y):
-        self.cx = center_x
-        self.cy = center_y
-        self.time_ticker = 0
+# --- MOUSE MAPPING SETTINGS ---
+# How fast the shape spins when mouse is at top/bottom of screen
+# Lower number = Slower maximum rotation speed
+ROTATION_MAX_SPEED = 0.05
+# How sensitive the mouse X axis is for zooming
+ZOOM_SENSITIVITY = 1.0
 
-    def get_polygon_points(self, sides, radius, rotation_offset_rads):
-        """ Generates (x,y) coordinates for a regular polygon """
+# --- SHAPE DEFAULTS ---
+DEFAULT_THICKNESS = 4       # Starting line thickness
+DEFAULT_LAYERS = 1          # Starting number of nested shapes
+DEFAULT_SHAPE_INDEX = 1     # Starting shape (0-9)
+MAX_LAYERS = 50             # Limit to prevent crashing
+LAYER_SPACING_RATIO = 0.85  # 1.0 = all stacked, 0.1 = tiny tunnel.
+                            # (This represents how big the inner shape is vs outer)
+
+# --- COLOR SETTINGS ---
+COLOR_CYCLE_SPEED_BASE = 0.002 # How fast colors fade automatically
+COLOR_SATURATION = 1.0
+COLOR_VALUE = 1.0
+
+# --- GEOMETRY TWEAKS ---
+# Adds a slight rotation to inner layers for a "Vortex" effect
+# Set to 0.0 for straight tunnels, 0.1 for twisting tunnels
+LAYER_TWIST_FACTOR = 0.0
+
+# ==============================================================================
+#                               LOGIC
+# ==============================================================================
+
+class ProjectorVisuals:
+    def __init__(self):
+        pygame.init()
+
+        # Display Setup
+        if FULLSCREEN:
+            info = pygame.display.Info()
+            self.w, self.h = info.current_w, info.current_h
+            self.screen = pygame.display.set_mode((self.w, self.h), pygame.FULLSCREEN | pygame.DOUBLEBUF)
+            pygame.mouse.set_visible(False)
+        else:
+            self.w, self.h = WINDOW_W, WINDOW_H
+            self.screen = pygame.display.set_mode((self.w, self.h))
+
+        self.clock = pygame.time.Clock()
+        self.center = (self.w // 2, self.h // 2)
+
+        # State Variables
+        self.running = True
+        self.shape_index = DEFAULT_SHAPE_INDEX # 0 to 9
+        self.num_layers = DEFAULT_LAYERS
+        self.thickness = DEFAULT_THICKNESS
+        self.base_rotation = 0.0
+
+        # Color State
+        self.hue = 0.0
+        self.auto_color = True
+        self.color_speed = COLOR_CYCLE_SPEED_BASE
+
+        # Twist State (controlled by Arrows)
+        self.twist = LAYER_TWIST_FACTOR
+
+    def get_poly_points(self, sides, radius, rotation, star_mode=False):
+        """
+        Generates points for polygons.
+        If star_mode is True, it generates a star by alternating radii.
+        """
         points = []
-        for i in range(sides):
-            angle = (2 * math.pi * i / sides) + rotation_offset_rads
-            x = self.cx + radius * math.cos(angle)
-            y = self.cy + radius * math.sin(angle)
-            points.append((x, y))
+        step = (2 * math.pi) / sides
+
+        if star_mode:
+            # Double the steps for inner and outer vertices
+            star_sides = sides * 2
+            step = (2 * math.pi) / star_sides
+            for i in range(star_sides):
+                # Alternate between full radius and half radius
+                r = radius if i % 2 == 0 else radius * 0.4
+                angle = (step * i) + rotation
+                x = self.center[0] + r * math.cos(angle)
+                y = self.center[1] + r * math.sin(angle)
+                points.append((x, y))
+        else:
+            # Regular Polygon
+            for i in range(sides):
+                angle = (step * i) + rotation
+                x = self.center[0] + radius * math.cos(angle)
+                y = self.center[1] + radius * math.sin(angle)
+                points.append((x, y))
+
         return points
 
-    def draw_shape(self, surface, mode, radius, rotation, color, thickness):
-        """
-        Dispatches drawing based on mode.
-        Modes: 0=Square, 1=Triangle, 2=Tunnel (Nested), 3=Star of David, 4=Hexagon
-        """
-
-        # MODE 0: Single Square
-        if mode == 0:
-            points = self.get_polygon_points(4, radius, rotation)
-            pygame.draw.lines(surface, color, True, points, thickness)
-
-        # MODE 1: Single Triangle
-        elif mode == 1:
-            # Offset rotation by -90 deg (pi/2) so triangle points up
-            points = self.get_polygon_points(3, radius, rotation - (math.pi/2))
-            pygame.draw.lines(surface, color, True, points, thickness)
-
-        # MODE 2: Tunnel (10 squares nested)
-        elif mode == 2:
-            count = 10
-            for i in range(count):
-                # Determine step size. Using non-linear math creates a 'depth' effect
-                step_radius = radius * ((count - i) / count)
-                # Optional: twist inner shapes slightly for a vortex effect
-                step_rot = rotation + (i * 0.05)
-                points = self.get_polygon_points(4, step_radius, step_rot)
-                pygame.draw.lines(surface, color, True, points, thickness)
-
-        # MODE 3: Star of David (Two Triangles)
-        elif mode == 3:
-            # Triangle 1 (Point up)
-            p1 = self.get_polygon_points(3, radius, rotation - (math.pi/2))
-            pygame.draw.lines(surface, color, True, p1, thickness)
-            # Triangle 2 (Point down - rotated 180 deg / pi radians)
-            p2 = self.get_polygon_points(3, radius, rotation - (math.pi/2) + math.pi)
-            pygame.draw.lines(surface, color, True, p2, thickness)
-
-        # MODE 4: Octagon (Circle-ish)
-        elif mode == 4:
-            points = self.get_polygon_points(8, radius, rotation)
-            pygame.draw.lines(surface, color, True, points, thickness)
-
-        # MODE 5: The "Portal" (Nested Circles/Polygons with shifting colors)
-        elif mode == 5:
-            count = 12
-            for i in range(count):
-                step_radius = radius * ((count - i) / count)
-                # Alternate shapes
-                sides = 3 if i % 2 == 0 else 3
-                rot_mod = math.pi if i % 2 == 0 else 0
-                points = self.get_polygon_points(3, step_radius, -rotation + rot_mod)
-                pygame.draw.lines(surface, color, True, points, thickness)
-
-
-def main():
-    pygame.init()
-
-    # Setup Screen
-    if FULLSCREEN:
-        info = pygame.display.Info()
-        w, h = info.current_w, info.current_h
-        screen = pygame.display.set_mode((w, h), pygame.FULLSCREEN | pygame.DOUBLEBUF)
-        pygame.mouse.set_visible(False) # Hide cursor for projection
-    else:
-        w, h = 800, 600
-        screen = pygame.display.set_mode((w, h))
-
-    clock = pygame.time.Clock()
-    engine = GeometryEngine(w // 2, h // 2)
-
-    # State Variables
-    running = True
-    current_shape_mode = 2  # Start with nested squares
-
-    # Dynamic Parameters
-    base_rotation = 0.0
-    hue = 0.0
-    color_cycling = True
-
-    # Configurable static thickness (or mapped to mouse if desired)
-    line_thickness = 5
-
-    while running:
-        # 1. Event Handling
+    def handle_input(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                # Number keys switch shapes
-                if event.key == pygame.K_1: current_shape_mode = 0
-                if event.key == pygame.K_2: current_shape_mode = 1
-                if event.key == pygame.K_3: current_shape_mode = 2
-                if event.key == pygame.K_4: current_shape_mode = 3
-                if event.key == pygame.K_5: current_shape_mode = 4
-                if event.key == pygame.K_6: current_shape_mode = 5
-                # C toggles color cycling
-                if event.key == pygame.K_c: color_cycling = not color_cycling
-                # Spacebar resets rotation
-                if event.key == pygame.K_SPACE: base_rotation = 0
+                self.running = False
 
-        # 2. Inputs & Math Mapping
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE: self.running = False
+                if event.key == pygame.K_SPACE: self.base_rotation = 0
+
+                # --- SHAPE SELECTION (1-0) ---
+                if event.key == pygame.K_1: self.shape_index = 0 # Triangle
+                if event.key == pygame.K_2: self.shape_index = 1 # Square
+                if event.key == pygame.K_3: self.shape_index = 2 # Pentagon
+                if event.key == pygame.K_4: self.shape_index = 3 # Hexagon
+                if event.key == pygame.K_5: self.shape_index = 4 # Octagon
+                if event.key == pygame.K_6: self.shape_index = 5 # Circle (30-gon)
+                if event.key == pygame.K_7: self.shape_index = 6 # Star 5-point
+                if event.key == pygame.K_8: self.shape_index = 7 # Star 6-point (David)
+                if event.key == pygame.K_9: self.shape_index = 8 # Diamond
+                if event.key == pygame.K_0: self.shape_index = 9 # X-Shape
+
+                # --- LAYERING (Q/W) ---
+                if event.key == pygame.K_q:
+                    self.num_layers = max(1, self.num_layers - 1)
+                if event.key == pygame.K_w:
+                    self.num_layers = min(MAX_LAYERS, self.num_layers + 1)
+
+                # --- THICKNESS (A/S) ---
+                if event.key == pygame.K_a:
+                    self.thickness = max(1, self.thickness - 1)
+                if event.key == pygame.K_s:
+                    self.thickness = min(50, self.thickness + 1)
+
+                # --- COLOR MODE ---
+                if event.key == pygame.K_c:
+                    self.auto_color = not self.auto_color
+
+        # --- ARROW KEYS (Continuous hold) ---
+        keys = pygame.key.get_pressed()
+
+        # LEFT/RIGHT: Adjust Twist (Vortex effect)
+        if keys[pygame.K_LEFT]:
+            self.twist -= 0.005
+        if keys[pygame.K_RIGHT]:
+            self.twist += 0.005
+
+        # UP/DOWN: Adjust Color Cycle Speed
+        if keys[pygame.K_UP]:
+            self.color_speed += 0.0001
+        if keys[pygame.K_DOWN]:
+            self.color_speed = max(0, self.color_speed - 0.0001)
+
+    def update_parameters(self):
         mouse_x, mouse_y = pygame.mouse.get_pos()
 
-        # Normalize Mouse X (0.0 to 1.0) -> Controls SIZE
-        norm_x = mouse_x / w
-        # Smooth clamp to ensure it doesn't vanish or go offscreen
-        target_radius = (h / 2) * MAX_SIZE_RATIO * (0.1 + (0.9 * norm_x))
+        # 1. Radius (Mapped to Mouse X)
+        # Normalize 0 to 1
+        norm_x = mouse_x / self.w
+        # Max radius is 90% of half screen height
+        max_r = (self.h / 2) * 0.95
+        # Base radius calculation
+        self.current_radius = max_r * (0.05 + (0.95 * norm_x))
 
-        # Normalize Mouse Y (0.0 to 1.0) -> Controls ROTATION SPEED
-        # Center of screen is 0 speed. Up is left spin, Down is right spin.
-        norm_y = (mouse_y / h) - 0.5
-        rotation_speed = norm_y * ROTATION_SENSITIVITY
-
-        # Apply Rotation
-        base_rotation += rotation_speed
+        # 2. Rotation (Mapped to Mouse Y)
+        # Center screen = 0 speed. Top = fast left, Bottom = fast right.
+        norm_y = (mouse_y / self.h) - 0.5
+        # Apply config limiter
+        rot_speed = norm_y * ROTATION_MAX_SPEED
+        self.base_rotation += rot_speed
 
         # 3. Color Calculation
-        final_color = (255, 255, 255) # Default White
+        if self.auto_color:
+            self.hue += self.color_speed
+            if self.hue > 1.0: self.hue -= 1.0
 
-        if color_cycling:
-            # Increment hue slowly, but maybe modify speed based on mouse too?
-            # Let's keep hue cycle constant for smooth visuals
-            hue += 0.002
-            if hue > 1.0: hue -= 1.0
+        r, g, b = colorsys.hsv_to_rgb(self.hue, COLOR_SATURATION, COLOR_VALUE)
+        self.current_rgb = (int(r*255), int(g*255), int(b*255))
 
-            # Convert HSV to RGB (0-255)
-            r, g, b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-            final_color = (int(r * 255), int(g * 255), int(b * 255))
+    def draw_shape_by_index(self, idx, radius, rotation, thickness):
+        """ Switch to determine which math to use based on index """
+        # 0: Triangle
+        if idx == 0:
+            pts = self.get_poly_points(3, radius, rotation - math.pi/6)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-        # Optional: Map line thickness to mouse X (larger shape = thicker lines)
-        # line_thickness = max(1, int(10 * norm_x))
+        # 1: Square
+        elif idx == 1:
+            pts = self.get_poly_points(4, radius, rotation + math.pi/4)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-        # 4. Rendering
-        screen.fill(background_color)
+        # 2: Pentagon
+        elif idx == 2:
+            pts = self.get_poly_points(5, radius, rotation - math.pi/2)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-        engine.draw_shape(
-            surface=screen,
-            mode=current_shape_mode,
-            radius=target_radius,
-            rotation=base_rotation,
-            color=final_color,
-            thickness=line_thickness
-        )
+        # 3: Hexagon
+        elif idx == 3:
+            pts = self.get_poly_points(6, radius, rotation)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-        pygame.display.flip()
+        # 4: Octagon
+        elif idx == 4:
+            pts = self.get_poly_points(8, radius, rotation + math.pi/8)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-        # 5. Timing
-        clock.tick(FPS)
+        # 5: Circle (30 sides is smooth enough)
+        elif idx == 5:
+            pts = self.get_poly_points(30, radius, rotation)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
 
-    pygame.quit()
+        # 6: 5-Point Star
+        elif idx == 6:
+            pts = self.get_poly_points(5, radius, rotation - math.pi/2, star_mode=True)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
+
+        # 7: Star of David (Two Triangles)
+        elif idx == 7:
+            # Triangle 1
+            p1 = self.get_poly_points(3, radius, rotation - math.pi/6)
+            pygame.draw.lines(self.screen, self.current_rgb, True, p1, thickness)
+            # Triangle 2 (Rotated 180)
+            p2 = self.get_poly_points(3, radius, rotation - math.pi/6 + math.pi)
+            pygame.draw.lines(self.screen, self.current_rgb, True, p2, thickness)
+
+        # 8: Diamond
+        elif idx == 8:
+            pts = self.get_poly_points(4, radius, rotation)
+            pygame.draw.lines(self.screen, self.current_rgb, True, pts, thickness)
+
+        # 9: The X (Two crossed lines, slightly fancy)
+        elif idx == 9:
+            # Line 1
+            l = radius
+            x1 = self.center[0] + l * math.cos(rotation + math.pi/4)
+            y1 = self.center[1] + l * math.sin(rotation + math.pi/4)
+            x2 = self.center[0] + l * math.cos(rotation + 5*math.pi/4)
+            y2 = self.center[1] + l * math.sin(rotation + 5*math.pi/4)
+            pygame.draw.line(self.screen, self.current_rgb, (x1,y1), (x2,y2), thickness)
+            # Line 2
+            x3 = self.center[0] + l * math.cos(rotation + 3*math.pi/4)
+            y3 = self.center[1] + l * math.sin(rotation + 3*math.pi/4)
+            x4 = self.center[0] + l * math.cos(rotation + 7*math.pi/4)
+            y4 = self.center[1] + l * math.sin(rotation + 7*math.pi/4)
+            pygame.draw.line(self.screen, self.current_rgb, (x3,y3), (x4,y4), thickness)
+
+
+    def run(self):
+        print("--- PROJECTOR PRO CONTROLS ---")
+        print("MOUSE X     : Zoom / Size")
+        print("MOUSE Y     : Rotation Speed")
+        print("KEYS 1-0    : Change Base Shape")
+        print("Q / W       : Remove / Add nested layers (Tunnel depth)")
+        print("A / S       : Thinner / Thicker Lines")
+        print("ARROWS L/R  : Twist Tunnel (Vortex Effect)")
+        print("ARROWS U/D  : Change Color Cycle Speed")
+        print("C           : Toggle Color Cycling")
+        print("SPACE       : Reset Rotation")
+        print("ESC         : Quit")
+
+        while self.running:
+            self.handle_input()
+            self.update_parameters()
+
+            self.screen.fill(BG_COLOR)
+
+            # Draw Loops (Nesting)
+            # We draw from outside in, or inside out?
+            # Inside out (smallest first) usually handles overwrite better,
+            # but for lines it doesn't matter much.
+
+            for i in range(self.num_layers):
+                # Calculate layer specific variables
+
+                # Decreasing radius for inner layers
+                # Formula: r = r_max * (ratio ^ i) gives exponential tunnel look
+                # Formula: r = r_max - (i * gap) gives linear look
+                # Let's use linear ratio for cleaner geometric look
+
+                scale = math.pow(LAYER_SPACING_RATIO, i)
+                layer_radius = self.current_radius * scale
+
+                # Stop drawing if shape is too small
+                if layer_radius < 2: break
+
+                # Apply twist offset
+                layer_rotation = self.base_rotation + (i * self.twist)
+
+                self.draw_shape_by_index(
+                    self.shape_index,
+                    layer_radius,
+                    layer_rotation,
+                    self.thickness
+                )
+
+            pygame.display.flip()
+            self.clock.tick(FPS)
+
+        pygame.quit()
 
 if __name__ == "__main__":
-    main()
+    app = ProjectorVisuals()
+    app.run()
